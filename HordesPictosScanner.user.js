@@ -3,7 +3,7 @@
 // @description  Ce script permet de scanner n'importe quelle âme pour y récupérer les valeurs de pictos choisis.
 // @icon         https://myhordes.fr/build/images/emotes/exploration.3c1e616f.gif
 // @namespace    http://tampermonkey.net/
-// @version      0.7
+// @version      0.8
 // @author       Eliam
 // @match        https://myhordes.fr/*
 // @match        https://myhordes.de/*
@@ -37,7 +37,7 @@
 
     // Contient les URLs des icônes qui n'en ont pas par défaut.
     const specialPictoUrls = {
-        'r_thermal': `https://myhordes.fr/build/images/pictos/r_thermal.f6f43ac0.gif`,
+        'r_thermal': `https://gitlab.com/eternaltwin/myhordes/myhordes/-/raw/master/assets/img/icons/title/r_thermal.gif`,
         'r_cburn': `https://myhordes.fr/build/images/pictos/r_cburn.5fa2e830.gif`
     };
 
