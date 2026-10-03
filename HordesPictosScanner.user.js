@@ -3,7 +3,7 @@
 // @description  Ce script permet de scanner n'importe quelle âme pour y récupérer les valeurs de pictos choisis.
 // @icon         https://myhordes.fr/build/images/emotes/exploration.3c1e616f.gif
 // @namespace    http://tampermonkey.net/
-// @version      0.8
+// @version      0.9
 // @author       Eliam
 // @match        https://myhordes.fr/*
 // @match        https://myhordes.de/*
@@ -40,6 +40,18 @@
         'r_thermal': `https://gitlab.com/eternaltwin/myhordes/myhordes/-/raw/master/assets/img/icons/title/r_thermal.gif`,
         'r_cburn': `https://myhordes.fr/build/images/pictos/r_cburn.5fa2e830.gif`
     };
+
+    const resultsSortOptions = {
+        'id-asc': 'ID croissant',
+        'id-desc': 'ID décroissant',
+        'scan-asc': 'Ordre de scan (premier → dernier)',
+        'scan-desc': 'Ordre de scan (dernier → premier)',
+    };
+
+    const pagePictoUrls = new Map();
+    const loadedPictoUrls = new Map();
+    const pictoImageQueue = [];
+    let activeImageLoads = 0;
 
     // Contient les données de chaque picto avec leurs propriétés (id, nom, rareté, catégorie).
     const pictoData = [
@@ -153,6 +165,151 @@
     // Fonctions utilitaires (extraction des informations sur le joueur, gestion des pictos)               //
     // *************************************************************************************************** //
 
+    // Réutilise les URLs à jour du jeu plutôt que de dépendre uniquement de GitLab.
+    function rememberPagePictoUrls() {
+        document.querySelectorAll('.distinctions .picto img').forEach(image => {
+            const match = image.src.match(/\/pictos\/(r_[^.]+)\./);
+            if (match) pagePictoUrls.set(match[1], image.src);
+        });
+    }
+
+    // Charge au plus quatre icônes à la fois, avec deux nouvelles tentatives par source.
+    function processPictoImageQueue() {
+        while (activeImageLoads < 4 && pictoImageQueue.length > 0) {
+            const { image, picto } = pictoImageQueue.shift();
+            if (!image.isConnected) continue;
+
+            activeImageLoads++;
+            const urls = [...new Set([
+                loadedPictoUrls.get(picto.id),
+                pagePictoUrls.get(picto.id),
+                specialPictoUrls[picto.id],
+                picto.id !== 'r_thermal' && `https://gitlab.com/eternaltwin/myhordes/myhordes/-/raw/master/assets/img/pictos/${picto.id}.gif`,
+            ].filter(Boolean))];
+            let sourceIndex = 0;
+            let retries = 0;
+            let timeout;
+            let retryTimer;
+            let finished = false;
+
+            const finish = () => {
+                if (finished) return;
+                finished = true;
+                clearTimeout(timeout);
+                clearTimeout(retryTimer);
+                image.onload = null;
+                image.onerror = null;
+                activeImageLoads--;
+                processPictoImageQueue();
+            };
+
+            const load = () => {
+                retryTimer = null;
+                if (!image.isConnected) {
+                    finish();
+                    return;
+                }
+
+                const url = new URL(urls[sourceIndex], location.href);
+                if (retries > 0) url.searchParams.set('hps_retry', `${Date.now()}-${retries}`);
+                timeout = setTimeout(handleError, 10000);
+                image.src = url.href;
+            };
+
+            const handleError = () => {
+                clearTimeout(timeout);
+                if (finished || retryTimer !== null && retryTimer !== undefined) return;
+                if (!image.isConnected) {
+                    finish();
+                    return;
+                }
+
+                if (retries < 2) {
+                    retries++;
+                    retryTimer = setTimeout(load, retries * 1000);
+                } else if (sourceIndex < urls.length - 1) {
+                    sourceIndex++;
+                    retries = 0;
+                    retryTimer = setTimeout(load, 0);
+                } else {
+                    image.title = `${picto.name} — image indisponible`;
+                    finish();
+                }
+            };
+
+            image.onload = () => {
+                if (image.naturalWidth === 0) {
+                    handleError();
+                    return;
+                }
+                loadedPictoUrls.set(picto.id, image.src);
+                finish();
+            };
+            image.onerror = handleError;
+            load();
+        }
+    }
+
+    function createPictoImage(picto) {
+        const image = document.createElement('img');
+        image.alt = picto.name;
+        image.title = picto.name;
+        image.loading = 'eager';
+        image.decoding = 'async';
+        image.referrerPolicy = 'no-referrer';
+        pictoImageQueue.push({ image, picto });
+        // Attend que le panneau soit attaché au document avant de lancer les requêtes.
+        setTimeout(processPictoImageQueue, 0);
+        return image;
+    }
+
+    // Les anciennes données n'ont pas d'ordre de scan : leur ordre actuel sert de départ.
+    function readResultsData() {
+        const storedData = JSON.parse(localStorage.getItem('resultsData')) || {};
+        let lastScanOrder = Object.values(storedData).reduce((last, player) => {
+            return Number.isSafeInteger(player.scanOrder) ? Math.max(last, player.scanOrder) : last;
+        }, 0);
+        Object.values(storedData).forEach(player => {
+            if (!Number.isSafeInteger(player.scanOrder) || player.scanOrder < 1) {
+                player.scanOrder = ++lastScanOrder;
+            }
+        });
+        return storedData;
+    }
+
+    function getResultsSort() {
+        const sort = localStorage.getItem('pictosResultsSort');
+        return Object.hasOwn(resultsSortOptions, sort) ? sort : 'id-asc';
+    }
+
+    function getSortedPlayerIds(storedData, sort = getResultsSort()) {
+        const direction = sort.endsWith('desc') ? -1 : 1;
+        return Object.keys(storedData).sort((a, b) => {
+            const difference = sort.startsWith('scan-')
+                ? storedData[a].scanOrder - storedData[b].scanOrder
+                : Number(a) - Number(b);
+            return direction * (difference || a.localeCompare(b, undefined, { numeric: true }));
+        });
+    }
+
+    // Une seule confirmation, même pour une sélection de plusieurs pictos.
+    function prepareSelectionChange() {
+        const hasResults = Object.keys(JSON.parse(localStorage.getItem('resultsData')) || {}).length > 0;
+        if (hasResults && !confirm("La sélection de nouveaux pictos réinitialisera les résultats.\nCertain ?")) {
+            return false;
+        }
+        if (hasResults) localStorage.removeItem('resultsData');
+        return true;
+    }
+
+    function updateSelectAllButton() {
+        const button = document.getElementById('select-all-pictos');
+        if (!button) return;
+        const pictos = Array.from(document.querySelectorAll('#pictos-scanner-popup .picto-button'));
+        const allSelected = pictos.length > 0 && pictos.every(picto => picto.style.opacity !== '0.15');
+        button.innerText = allSelected ? 'Tout désélectionner' : 'Tout sélectionner';
+    }
+
     // Fonction pour extraire l'ID et le nom du joueur.
     function getPlayerInfo() {
         const distinctionsElement = document.querySelector('hordes-distinctions');
@@ -171,14 +328,14 @@
         const pictoStates = {};
         const categoryStates = {};
 
-        document.querySelectorAll('.picto-button').forEach(picto => {
+        document.querySelectorAll('#pictos-scanner-popup .picto-button').forEach(picto => {
             const opacity = picto.style.opacity || '1';
             pictoStates[picto.title] = opacity;
         });
 
-        document.querySelectorAll('.category-title').forEach(categoryElement => {
+        document.querySelectorAll('#pictos-scanner-popup .category-title').forEach(categoryElement => {
             const categoryName = categoryElement.innerText;
-            const pictos = document.querySelectorAll(`.picto-button[data-category="${categoryName}"]`);
+            const pictos = document.querySelectorAll(`#pictos-scanner-popup .picto-button[data-category="${categoryName}"]`);
             const allDeselected = Array.from(pictos).every(picto => picto.style.opacity === '0.15');
 
             categoryElement.style.opacity = allDeselected ? '0.15' : '1';
@@ -187,20 +344,21 @@
 
         const stateToSave = { pictoStates, categoryStates };
         localStorage.setItem('pictosState', JSON.stringify(stateToSave));
+        updateSelectAllButton();
     }
 
     // Fonction pour charger l'état des pictos et des catégories depuis localStorage.
     function loadSettings() {
         const savedState = JSON.parse(localStorage.getItem('pictosState')) || { pictoStates: {}, categoryStates: {} };
 
-        document.querySelectorAll('.picto-button').forEach(picto => {
+        document.querySelectorAll('#pictos-scanner-popup .picto-button').forEach(picto => {
             const opacity = savedState.pictoStates[picto.title];
             if (opacity) {
                 picto.style.opacity = opacity;
             }
         });
 
-        document.querySelectorAll('.category-title').forEach(category => {
+        document.querySelectorAll('#pictos-scanner-popup .category-title').forEach(category => {
             const opacity = savedState.categoryStates[category.innerText];
             if (opacity) {
                 category.style.opacity = opacity;
@@ -208,9 +366,9 @@
         });
 
         // Ajout de la logique pour gérer la sélection automatique des catégories.
-        document.querySelectorAll('.category-title').forEach(category => {
+        document.querySelectorAll('#pictos-scanner-popup .category-title').forEach(category => {
             const categoryName = category.innerText;
-            const categoryPictos = document.querySelectorAll(`.picto-button[data-category="${categoryName}"]`);
+            const categoryPictos = document.querySelectorAll(`#pictos-scanner-popup .picto-button[data-category="${categoryName}"]`);
             const allSelected = Array.from(categoryPictos).every(picto => picto.style.opacity === '1');
             const noneSelected = Array.from(categoryPictos).every(picto => picto.style.opacity === '0.15');
 
@@ -222,15 +380,17 @@
                 category.style.opacity = savedState.categoryStates[categoryName] || '1';
             }
         });
+        updateSelectAllButton();
     }
 
     // Fonction pour extraire les données des pictos de la page.
     function getData() {
+        rememberPagePictoUrls();
         const savedState = JSON.parse(localStorage.getItem('pictosState')) || { pictoStates: {} };
         const selectedPictos = [];
 
         document.querySelectorAll('.distinctions .picto').forEach(pictoElement => {
-            const imgSrc = pictoElement.querySelector('img').src;
+            const imgSrc = pictoElement.querySelector('img')?.src || '';
             const pictoIdMatch = imgSrc.match(/\/pictos\/(r_[^.]+)\./);
             const pictoId = pictoIdMatch ? pictoIdMatch[1] : null;
 
@@ -238,7 +398,7 @@
                 const pictoName = pictoData.find(p => p.id === pictoId)?.name;
                 const opacity = savedState.pictoStates[pictoName];
 
-                if (opacity === '1') {
+                if (pictoName && opacity !== '0.15') {
                     const valueElements = pictoElement.querySelectorAll('.counter .count');
                     const value = Array.from(valueElements).map(el => el.getAttribute('data-num')).join('');
                     selectedPictos.push({ pictoId: pictoId, value: value || '0' });
@@ -251,9 +411,12 @@
 
     // Fonction pour stocker les données des pictos en fonction de l'ID du joueur.
     function saveData(playerId, playerName) {
-        const existingData = JSON.parse(localStorage.getItem('resultsData')) || {};
+        const existingData = readResultsData();
         const pictosData = getData();
-        existingData[playerId] = { playerName, pictosData };
+        const scanOrder = existingData[playerId]?.scanOrder || Object.values(existingData)
+            .reduce((last, player) => Math.max(last, player.scanOrder), 0) + 1;
+        // Un nouveau scan d'une même âme actualise ses valeurs en conservant sa place.
+        existingData[playerId] = { playerName, pictosData, scanOrder };
         localStorage.setItem('resultsData', JSON.stringify(existingData));
     }
 
@@ -278,9 +441,7 @@
         pictoButton.style.cursor = 'pointer';
         pictoButton.title = picto.name;
 
-        const pictoImage = document.createElement('img');
-        pictoImage.src = specialPictoUrls[picto.id] || `https://gitlab.com/eternaltwin/myhordes/myhordes/-/raw/master/assets/img/pictos/${picto.id}.gif`;
-        pictoImage.alt = picto.name;
+        const pictoImage = createPictoImage(picto);
         pictoImage.style.display = 'block';
         pictoImage.style.margin = '0 auto';
         pictoImage.style.width = '100%';
@@ -288,6 +449,7 @@
         pictoButton.appendChild(pictoImage);
 
         const savedState = JSON.parse(localStorage.getItem('pictosState')) || { pictoStates: {}, categoryStates: {} };
+        pictoButton.style.opacity = '1';
         if (savedState.pictoStates[picto.name]) {
             pictoButton.style.opacity = savedState.pictoStates[picto.name];
         }
@@ -301,16 +463,7 @@
         });
 
         pictoButton.addEventListener('click', () => {
-            const resultsData = JSON.parse(localStorage.getItem('resultsData')) || {};
-            const hasResults = Object.keys(resultsData).length > 0;
-
-            if (hasResults && !confirm("La sélection de nouveaux pictos réinitialisera les résultats.\nCertain ?")) {
-                return;
-            }
-
-            if (hasResults) {
-                localStorage.removeItem('resultsData');
-            }
+            if (!prepareSelectionChange()) return;
 
             pictoButton.style.opacity = pictoButton.style.opacity === '0.15' ? '1' : '0.15';
             saveSettings();
@@ -408,26 +561,17 @@
         });
 
         categoryTitle.addEventListener('click', () => {
-            const resultsData = JSON.parse(localStorage.getItem('resultsData')) || {};
-            const hasResults = Object.keys(resultsData).length > 0;
-
-            if (hasResults && !confirm("La sélection de nouveaux pictos réinitialisera les résultats.\nCertain ?")) {
-                return;
-            }
-
-            if (hasResults) {
-                localStorage.removeItem('resultsData');
-            }
+            if (!prepareSelectionChange()) return;
 
             const isSelected = categoryTitle.style.opacity === '0.15';
             categoryTitle.style.opacity = isSelected ? '1' : '0.15';
 
-            const pictos = document.querySelectorAll(`.picto-button[data-category="${category}"]`);
+            const pictos = document.querySelectorAll(`#pictos-scanner-popup .picto-button[data-category="${category}"]`);
             pictos.forEach(picto => {
                 picto.style.opacity = isSelected ? '1' : '0.15';
             });
 
-            saveSettings(category);
+            saveSettings();
         });
 
         return categoryTitle;
@@ -635,6 +779,7 @@
 
     // Crée le panel de la section "Sélection" avec les catégories de picto.
     function createSelectionPanel() {
+        rememberPagePictoUrls();
         const selectionPanel = document.createElement('div');
         selectionPanel.style.display = 'block';
 
@@ -653,8 +798,6 @@
         });
 
         selectionPanel.appendChild(pictoSelectionDiv);
-
-        loadSettings();
 
         return selectionPanel;
     }
@@ -679,6 +822,8 @@
         tableWrapper.style.overflow = 'auto';
         tableWrapper.style.height = '495px';
         tableWrapper.style.width = '100%';
+        tableWrapper.style.flex = '1';
+        tableWrapper.style.minHeight = '0';
 
         const table = document.createElement('table');
         table.style.borderCollapse = 'collapse';
@@ -687,15 +832,41 @@
 
         const savedState = JSON.parse(localStorage.getItem('pictosState')) || { pictoStates: {} };
         const sortedPictoData = pictoData
-        .filter(picto => savedState.pictoStates[picto.name] === '1')
+        .filter(picto => savedState.pictoStates[picto.name] !== '0.15')
         .sort((a, b) => a.name.localeCompare(b.name));
 
-        const storedData = JSON.parse(localStorage.getItem('resultsData')) || {};
-        const playerIds = Object.keys(storedData);
+        const storedData = readResultsData();
+        const playerIds = getSortedPlayerIds(storedData);
 
         if (playerIds.length === 0 || sortedPictoData.length === 0) {
             return resultsPanel;
         }
+
+        const sortControls = document.createElement('div');
+        sortControls.style.display = 'flex';
+        sortControls.style.alignItems = 'center';
+        sortControls.style.gap = '8px';
+        sortControls.style.marginBottom = '10px';
+        sortControls.style.flexShrink = '0';
+        const sortLabel = document.createElement('label');
+        sortLabel.htmlFor = 'pictos-results-sort';
+        sortLabel.innerText = 'Trier par :';
+        sortLabel.style.color = colors.lightGold;
+        const sortSelect = document.createElement('select');
+        sortSelect.id = 'pictos-results-sort';
+        sortSelect.style.backgroundColor = colors.darkBrown;
+        sortSelect.style.color = colors.lightGold;
+        sortSelect.style.border = `1px solid ${colors.lightGold}`;
+        sortSelect.style.padding = '4px';
+        Object.entries(resultsSortOptions).forEach(([value, text]) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.innerText = text;
+            sortSelect.appendChild(option);
+        });
+        sortSelect.value = getResultsSort();
+        sortControls.append(sortLabel, sortSelect);
+        resultsPanel.appendChild(sortControls);
 
         // Crée l'en-tête du tableau
         const thead = document.createElement('thead');
@@ -716,9 +887,7 @@
         // Ajouter les pictos à l'en-tête
         sortedPictoData.forEach((picto, index) => {
             const pictoHeader = document.createElement('th');
-            const pictoImage = document.createElement('img');
-            pictoImage.src = specialPictoUrls[picto.id] || `https://gitlab.com/eternaltwin/myhordes/myhordes/-/raw/master/assets/img/pictos/${picto.id}.gif`;
-            pictoImage.alt = picto.name;
+            const pictoImage = createPictoImage(picto);
             pictoImage.style.width = '16px';
             pictoImage.style.height = '16px';
             pictoHeader.appendChild(pictoImage);
@@ -749,6 +918,7 @@
             const playerData = storedData[playerId];
 
             const row = document.createElement('tr');
+            row.dataset.playerId = playerId;
             row.style.height = '27px';
 
             // Colonne des pseudos
@@ -756,6 +926,7 @@
             const playerLink = document.createElement('a');
             playerLink.className = 'username undecorated';
             playerLink.setAttribute('x-user-id', playerId);
+            playerLink.title = `ID : ${playerId}`;
             playerLink.innerText = playerData.playerName;
             playerLink.style.whiteSpace = 'nowrap';
             playerLink.style.cursor = 'pointer';
@@ -805,6 +976,20 @@
             tbody.appendChild(row);
         });
 
+        sortSelect.addEventListener('change', () => {
+            localStorage.setItem('pictosResultsSort', sortSelect.value);
+            const rows = new Map(Array.from(tbody.rows).map(row => [row.dataset.playerId, row]));
+            getSortedPlayerIds(storedData, sortSelect.value).forEach(playerId => {
+                tbody.appendChild(rows.get(playerId));
+            });
+            Array.from(tbody.rows).forEach((row, index) => {
+                row.querySelectorAll('td').forEach(cell => {
+                    cell.style.borderBottom = index === tbody.rows.length - 1
+                        ? `2px solid ${colors.darkBrown}` : '';
+                });
+            });
+        });
+
         table.appendChild(tbody);
         tableWrapper.appendChild(table);
         resultsPanel.appendChild(tableWrapper);
@@ -815,6 +1000,7 @@
         buttonContainer.style.gap = '10px';
         buttonContainer.style.marginTop = '5px';
         buttonContainer.style.marginBottom = '5px';
+        buttonContainer.style.flexShrink = '0';
 
         const resetResultsButton = createResetResultsButton();
         const resetCopyButton = createCopyResultsButton();
@@ -829,6 +1015,7 @@
     // Fonction utilitaire pour créer un bouton avec des styles et comportements communs.
     function createCustomButton(id, text, onClick) {
         const button = document.createElement('button');
+        button.type = 'button';
         button.id = id;
         button.innerText = text;
 
@@ -862,6 +1049,16 @@
         button.addEventListener('click', onClick);
 
         return button;
+    }
+
+    function createSelectAllPictosButton() {
+        return createCustomButton('select-all-pictos', 'Tout sélectionner', () => {
+            const pictos = Array.from(document.querySelectorAll('#pictos-scanner-popup .picto-button'));
+            const allSelected = pictos.every(picto => picto.style.opacity !== '0.15');
+            if (!prepareSelectionChange()) return;
+            pictos.forEach(picto => picto.style.opacity = allSelected ? '0.15' : '1');
+            saveSettings();
+        });
     }
 
     // Crée le bouton de réinitialisation des pictos dans l'onglet Sélection.
@@ -955,19 +1152,23 @@
         const { tabContainer, panels } = createTabBar();
 
         const selectionPanel = createSelectionPanel();
-        const resultsPanel = createResultsPanel();
+        // Le tableau et ses icônes sont créés uniquement à l'ouverture de l'onglet Résultats.
+        const resultsPanel = document.createElement('div');
 
         selectionPanel.style.display = 'block';
         resultsPanel.style.display = 'none';
 
-        selectionPanel.innerHTML = '';
-        resultsPanel.innerHTML = '';
-
-        selectionPanel.appendChild(createSelectionPanel());
-        resultsPanel.appendChild(createResultsPanel());
-
-        const resetPictosButton = createResetPictosButton();
-        selectionPanel.appendChild(resetPictosButton);
+        const selectionButtons = document.createElement('div');
+        selectionButtons.style.display = 'flex';
+        selectionButtons.style.justifyContent = 'center';
+        selectionButtons.style.flexWrap = 'wrap';
+        selectionButtons.style.gap = '10px';
+        selectionButtons.style.margin = '15px';
+        [createSelectAllPictosButton(), createResetPictosButton()].forEach(button => {
+            button.style.margin = '0';
+            selectionButtons.appendChild(button);
+        });
+        selectionPanel.appendChild(selectionButtons);
 
         panels.push(selectionPanel, resultsPanel);
         popup.appendChild(tabContainer);
