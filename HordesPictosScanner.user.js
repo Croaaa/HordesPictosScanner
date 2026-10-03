@@ -3,7 +3,7 @@
 // @description  Ce script permet de scanner n'importe quelle âme pour y récupérer les valeurs de pictos choisis.
 // @icon         https://myhordes.fr/build/images/emotes/exploration.3c1e616f.gif
 // @namespace    http://tampermonkey.net/
-// @version      0.9
+// @version      0.9.1
 // @author       Eliam
 // @match        https://myhordes.fr/*
 // @match        https://myhordes.de/*
@@ -42,10 +42,8 @@
     };
 
     const resultsSortOptions = {
-        'id-asc': 'ID croissant',
-        'id-desc': 'ID décroissant',
-        'scan-asc': 'Ordre de scan (premier → dernier)',
-        'scan-desc': 'Ordre de scan (dernier → premier)',
+        'id-asc': 'ID',
+        'scan-asc': 'Ordre de scan',
     };
 
     const pagePictoUrls = new Map();
@@ -279,16 +277,16 @@
 
     function getResultsSort() {
         const sort = localStorage.getItem('pictosResultsSort');
+        if (sort === 'scan-desc') return 'scan-asc';
         return Object.hasOwn(resultsSortOptions, sort) ? sort : 'id-asc';
     }
 
     function getSortedPlayerIds(storedData, sort = getResultsSort()) {
-        const direction = sort.endsWith('desc') ? -1 : 1;
         return Object.keys(storedData).sort((a, b) => {
-            const difference = sort.startsWith('scan-')
+            const difference = sort === 'scan-asc'
                 ? storedData[a].scanOrder - storedData[b].scanOrder
                 : Number(a) - Number(b);
-            return direction * (difference || a.localeCompare(b, undefined, { numeric: true }));
+            return difference || a.localeCompare(b, undefined, { numeric: true });
         });
     }
 
@@ -842,22 +840,20 @@
             return resultsPanel;
         }
 
-        const sortControls = document.createElement('div');
-        sortControls.style.display = 'flex';
-        sortControls.style.alignItems = 'center';
-        sortControls.style.gap = '8px';
-        sortControls.style.marginBottom = '10px';
-        sortControls.style.flexShrink = '0';
-        const sortLabel = document.createElement('label');
-        sortLabel.htmlFor = 'pictos-results-sort';
-        sortLabel.innerText = 'Trier par :';
-        sortLabel.style.color = colors.lightGold;
         const sortSelect = document.createElement('select');
         sortSelect.id = 'pictos-results-sort';
-        sortSelect.style.backgroundColor = colors.darkBrown;
+        sortSelect.setAttribute('aria-label', 'Trier les résultats');
+        sortSelect.style.backgroundColor = colors.mediumBrown;
         sortSelect.style.color = colors.lightGold;
-        sortSelect.style.border = `1px solid ${colors.lightGold}`;
-        sortSelect.style.padding = '4px';
+        sortSelect.style.border = 'none';
+        sortSelect.style.padding = '2px 0';
+        sortSelect.style.width = '100%';
+        sortSelect.style.maxWidth = '110px';
+        sortSelect.style.boxSizing = 'border-box';
+        sortSelect.style.fontFamily = 'inherit';
+        sortSelect.style.fontSize = '11px';
+        sortSelect.style.textAlign = 'center';
+        sortSelect.style.cursor = 'pointer';
         Object.entries(resultsSortOptions).forEach(([value, text]) => {
             const option = document.createElement('option');
             option.value = value;
@@ -865,14 +861,12 @@
             sortSelect.appendChild(option);
         });
         sortSelect.value = getResultsSort();
-        sortControls.append(sortLabel, sortSelect);
-        resultsPanel.appendChild(sortControls);
 
         // Crée l'en-tête du tableau
         const thead = document.createElement('thead');
         const headerRow = document.createElement('tr');
 
-        // Cellule vide en haut à gauche
+        // Choix du tri dans la cellule en haut à gauche.
         const emptyHeader = document.createElement('th');
         emptyHeader.style.border = 'none';
         emptyHeader.style.boxShadow = `inset 2px 0 0 0 ${colors.darkBrown}, inset 0 2px 0 0 ${colors.darkBrown}, inset -1px 0 0 0 ${colors.darkBrown}, inset 0 -1px 0 0 ${colors.darkBrown}`;
@@ -882,6 +876,7 @@
         emptyHeader.style.top = '0';
         emptyHeader.style.left = '0';
         emptyHeader.style.zIndex = '4';
+        emptyHeader.appendChild(sortSelect);
         headerRow.appendChild(emptyHeader);
 
         // Ajouter les pictos à l'en-tête
