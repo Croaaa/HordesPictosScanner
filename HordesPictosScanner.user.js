@@ -3,7 +3,7 @@
 // @description  Ce script permet de scanner n'importe quelle âme pour y récupérer les valeurs de pictos choisis.
 // @icon         https://myhordes.fr/build/images/emotes/exploration.3c1e616f.gif
 // @namespace    http://tampermonkey.net/
-// @version      0.9.1
+// @version      0.9.2
 // @author       Eliam
 // @match        https://myhordes.fr/*
 // @match        https://myhordes.de/*
@@ -43,7 +43,7 @@
 
     const resultsSortOptions = {
         'id-asc': 'ID',
-        'scan-asc': 'Ordre de scan',
+        'scan-asc': 'Scan',
     };
 
     const pagePictoUrls = new Map();
@@ -840,27 +840,83 @@
             return resultsPanel;
         }
 
-        const sortSelect = document.createElement('select');
-        sortSelect.id = 'pictos-results-sort';
-        sortSelect.setAttribute('aria-label', 'Trier les résultats');
-        sortSelect.style.backgroundColor = colors.mediumBrown;
-        sortSelect.style.color = colors.lightGold;
-        sortSelect.style.border = 'none';
-        sortSelect.style.padding = '2px 0';
-        sortSelect.style.width = '100%';
-        sortSelect.style.maxWidth = '110px';
-        sortSelect.style.boxSizing = 'border-box';
-        sortSelect.style.fontFamily = 'inherit';
-        sortSelect.style.fontSize = '11px';
-        sortSelect.style.textAlign = 'center';
-        sortSelect.style.cursor = 'pointer';
-        Object.entries(resultsSortOptions).forEach(([value, text]) => {
-            const option = document.createElement('option');
-            option.value = value;
-            option.innerText = text;
-            sortSelect.appendChild(option);
+        // Bascule au clic dans une cellule gravée, intégrée à l'en-tête.
+        const sortButton = document.createElement('button');
+        sortButton.id = 'pictos-results-sort';
+        sortButton.type = 'button';
+        sortButton.style.display = 'flex';
+        sortButton.style.alignItems = 'center';
+        sortButton.style.justifyContent = 'center';
+        sortButton.style.width = '100%';
+        sortButton.style.minHeight = '34px';
+        sortButton.style.boxSizing = 'border-box';
+        sortButton.style.margin = '0';
+        sortButton.style.padding = '4px';
+        sortButton.style.border = '0';
+        sortButton.style.borderRadius = '0';
+        sortButton.style.boxShadow = 'none';
+        sortButton.style.background = 'transparent';
+        sortButton.style.color = colors.lightGold;
+        sortButton.style.fontFamily = 'inherit';
+        sortButton.style.fontSize = '11px';
+        sortButton.style.fontWeight = '400';
+        sortButton.style.fontVariant = 'normal';
+        sortButton.style.lineHeight = '12px';
+        sortButton.style.textAlign = 'center';
+        sortButton.style.cursor = 'pointer';
+
+        const sortFace = document.createElement('span');
+        sortFace.style.display = 'flex';
+        sortFace.style.alignItems = 'center';
+        sortFace.style.justifyContent = 'center';
+        sortFace.style.gap = '4px';
+        sortFace.style.width = '100%';
+        sortFace.style.minHeight = '25px';
+        sortFace.style.boxSizing = 'border-box';
+        sortFace.style.backgroundColor = '#63391f';
+        sortFace.style.border = '1px solid #502510';
+        sortFace.style.borderBottomColor = '#a37543';
+        sortFace.style.boxShadow = 'inset 0 2px 3px #3013047d';
+
+        const sortLabel = document.createElement('span');
+        sortFace.appendChild(sortLabel);
+
+        // Icône embarquée : aucune image ou bibliothèque supplémentaire à charger.
+        const svgNamespace = 'http://www.w3.org/2000/svg';
+        const sortIcon = document.createElementNS(svgNamespace, 'svg');
+        sortIcon.setAttribute('viewBox', '0 0 24 24');
+        sortIcon.setAttribute('width', '12');
+        sortIcon.setAttribute('height', '12');
+        sortIcon.setAttribute('fill', 'none');
+        sortIcon.setAttribute('stroke', 'currentColor');
+        sortIcon.setAttribute('stroke-width', '2');
+        sortIcon.setAttribute('stroke-linecap', 'round');
+        sortIcon.setAttribute('stroke-linejoin', 'round');
+        sortIcon.setAttribute('aria-hidden', 'true');
+        sortIcon.setAttribute('focusable', 'false');
+        sortIcon.style.flex = '0 0 12px';
+        sortIcon.style.opacity = '0.8';
+        ['m2 9 3-3 3 3', 'M5 6v8a4 4 0 0 0 4 4h1',
+            'm22 15-3 3-3-3', 'M19 18v-8a4 4 0 0 0-4-4h-1'].forEach(pathData => {
+            const path = document.createElementNS(svgNamespace, 'path');
+            path.setAttribute('d', pathData);
+            sortIcon.appendChild(path);
         });
-        sortSelect.value = getResultsSort();
+        sortFace.appendChild(sortIcon);
+        sortButton.appendChild(sortFace);
+
+        const updateSortButton = () => {
+            const sort = getResultsSort();
+            const byScan = sort === 'scan-asc';
+            sortLabel.textContent = resultsSortOptions[sort];
+            sortButton.dataset.sort = sort;
+            sortButton.setAttribute('aria-pressed', String(byScan));
+            sortButton.setAttribute('aria-label', byScan
+                ? 'Tri par ordre de scan croissant. Cliquer pour passer au tri par ID.'
+                : 'Tri par ID croissant. Cliquer pour passer à l’ordre de scan.');
+            sortButton.title = byScan ? 'Trier par ID' : 'Trier par ordre de scan';
+        };
+        updateSortButton();
 
         // Crée l'en-tête du tableau
         const thead = document.createElement('thead');
@@ -870,13 +926,13 @@
         const emptyHeader = document.createElement('th');
         emptyHeader.style.border = 'none';
         emptyHeader.style.boxShadow = `inset 2px 0 0 0 ${colors.darkBrown}, inset 0 2px 0 0 ${colors.darkBrown}, inset -1px 0 0 0 ${colors.darkBrown}, inset 0 -1px 0 0 ${colors.darkBrown}`;
-        emptyHeader.style.padding = '4px';
+        emptyHeader.style.padding = '0';
         emptyHeader.style.backgroundColor = colors.mediumBrown;
         emptyHeader.style.position = 'sticky';
         emptyHeader.style.top = '0';
         emptyHeader.style.left = '0';
         emptyHeader.style.zIndex = '4';
-        emptyHeader.appendChild(sortSelect);
+        emptyHeader.appendChild(sortButton);
         headerRow.appendChild(emptyHeader);
 
         // Ajouter les pictos à l'en-tête
@@ -971,10 +1027,12 @@
             tbody.appendChild(row);
         });
 
-        sortSelect.addEventListener('change', () => {
-            localStorage.setItem('pictosResultsSort', sortSelect.value);
+        sortButton.addEventListener('click', () => {
+            const sort = getResultsSort() === 'id-asc' ? 'scan-asc' : 'id-asc';
+            localStorage.setItem('pictosResultsSort', sort);
+            updateSortButton();
             const rows = new Map(Array.from(tbody.rows).map(row => [row.dataset.playerId, row]));
-            getSortedPlayerIds(storedData, sortSelect.value).forEach(playerId => {
+            getSortedPlayerIds(storedData, sort).forEach(playerId => {
                 tbody.appendChild(rows.get(playerId));
             });
             Array.from(tbody.rows).forEach((row, index) => {
