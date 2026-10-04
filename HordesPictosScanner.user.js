@@ -3,7 +3,7 @@
 // @description  Scanne les pictos d’une liste de joueurs et conserve chaque relevé séparément.
 // @icon         https://myhordes.fr/build/images/emotes/exploration.3c1e616f.gif
 // @namespace    http://tampermonkey.net/
-// @version      0.10.3
+// @version      0.10.4
 // @author       Eliam
 // @match        https://myhordes.fr/*
 // @match        https://myhordes.de/*
@@ -1412,7 +1412,6 @@
     border-top: 1px solid #ad7b4b;
 }
 #pictos-scanner-popup #pictos-selection-count { margin-right: auto; font-size: 11px; color: #f0d79e; }
-#pictos-scanner-popup #reset-pictos { background: none !important; border-color: #a8794c !important; box-shadow: none !important; }
 #pictos-scanner-popup .hps-chrome { background: linear-gradient(#a97539, #63340f) !important; border-bottom: 1px solid #c69862; }
 #pictos-scanner-popup .hps-chrome > .cell { padding: 5px 8px 0; }
 #pictos-scanner-popup .hps-chrome .tabs { margin: 0 !important; }
