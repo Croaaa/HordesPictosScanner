@@ -3,7 +3,7 @@
 // @description  Scanne les pictos d’une liste de joueurs et conserve chaque relevé séparément.
 // @icon         https://myhordes.fr/build/images/emotes/exploration.3c1e616f.gif
 // @namespace    http://tampermonkey.net/
-// @version      0.10.2
+// @version      0.10.3
 // @author       Eliam
 // @match        https://myhordes.fr/*
 // @match        https://myhordes.de/*
@@ -689,15 +689,11 @@
     }
 
     function createTrashIcon() {
-        const ns = 'http://www.w3.org/2000/svg';
-        const icon = document.createElementNS(ns, 'svg');
-        for (const [attribute, value] of Object.entries({ viewBox: '0 0 24 24', width: '14', height: '14',
-            fill: 'none', stroke: 'currentColor', 'stroke-width': '1.6', 'stroke-linecap': 'round', 'aria-hidden': 'true' })) {
-            icon.setAttribute(attribute, value);
-        }
-        const path = document.createElementNS(ns, 'path');
-        path.setAttribute('d', 'M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7');
-        icon.appendChild(path); return icon;
+        const icon = document.createElement('img');
+        icon.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAsTAAALEwEAmpwYAAAGMWlUWHRYTUw6Y29tLmFkb2JlLnhtcAAAAAAAPD94cGFja2V0IGJlZ2luPSLvu78iIGlkPSJXNU0wTXBDZWhpSHpyZVN6TlRjemtjOWQiPz4gPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyIgeDp4bXB0az0iQWRvYmUgWE1QIENvcmUgOS4wLWMwMDEgNzkuMTRlY2I0MiwgMjAyMi8xMi8wMi0xOToxMjo0NCAgICAgICAgIj4gPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4gPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIgeG1sbnM6eG1wPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvIiB4bWxuczpkYz0iaHR0cDovL3B1cmwub3JnL2RjL2VsZW1lbnRzLzEuMS8iIHhtbG5zOnBob3Rvc2hvcD0iaHR0cDovL25zLmFkb2JlLmNvbS9waG90b3Nob3AvMS4wLyIgeG1sbnM6eG1wTU09Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9tbS8iIHhtbG5zOnN0RXZ0PSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvc1R5cGUvUmVzb3VyY2VFdmVudCMiIHhtcDpDcmVhdG9yVG9vbD0iQWRvYmUgUGhvdG9zaG9wIDI0LjIgKFdpbmRvd3MpIiB4bXA6Q3JlYXRlRGF0ZT0iMjAyMy0wMy0yOFQyMjoyMToxOCswMjowMCIgeG1wOk1vZGlmeURhdGU9IjIwMjMtMDMtMjhUMjI6NTE6MDkrMDI6MDAiIHhtcDpNZXRhZGF0YURhdGU9IjIwMjMtMDMtMjhUMjI6NTE6MDkrMDI6MDAiIGRjOmZvcm1hdD0iaW1hZ2UvcG5nIiBwaG90b3Nob3A6Q29sb3JNb2RlPSIzIiB4bXBNTTpJbnN0YW5jZUlEPSJ4bXAuaWlkOmJlYjUzNTFiLWNkMjAtOGU0MS1iOGYyLTYyNTM1ZTBhOWMwMSIgeG1wTU06RG9jdW1lbnRJRD0iYWRvYmU6ZG9jaWQ6cGhvdG9zaG9wOmE2YThmMjNiLWQ1NjEtODA0ZS1hZWZkLTlmYzllOGQ0ZDI0ZSIgeG1wTU06T3JpZ2luYWxEb2N1bWVudElEPSJ4bXAuZGlkOmVhNjA5MGUzLWRiYzktMzA0Yy1iMTZkLTZlZGNlMWRiNWU2OCI+IDx4bXBNTTpIaXN0b3J5PiA8cmRmOlNlcT4gPHJkZjpsaSBzdEV2dDphY3Rpb249ImNyZWF0ZWQiIHN0RXZ0Omluc3RhbmNlSUQ9InhtcC5paWQ6ZWE2MDkwZTMtZGJjOS0zMDRjLWIxNmQtNmVkY2UxZGI1ZTY4IiBzdEV2dDp3aGVuPSIyMDIzLTAzLTI4VDIyOjIxOjE4KzAyOjAwIiBzdEV2dDpzb2Z0d2FyZUFnZW50PSJBZG9iZSBQaG90b3Nob3AgMjQuMiAoV2luZG93cykiLz4gPHJkZjpsaSBzdEV2dDphY3Rpb249ImNvbnZlcnRlZCIgc3RFdnQ6cGFyYW1ldGVycz0iZnJvbSBhcHBsaWNhdGlvbi92bmQuYWRvYmUucGhvdG9zaG9wIHRvIGltYWdlL3BuZyIvPiA8cmRmOmxpIHN0RXZ0OmFjdGlvbj0ic2F2ZWQiIHN0RXZ0Omluc3RhbmNlSUQ9InhtcC5paWQ6YmViNTM1MWItY2QyMC04ZTQxLWI4ZjItNjI1MzVlMGE5YzAxIiBzdEV2dDp3aGVuPSIyMDIzLTAzLTI4VDIyOjUxOjA5KzAyOjAwIiBzdEV2dDpzb2Z0d2FyZUFnZW50PSJBZG9iZSBQaG90b3Nob3AgMjQuMiAoV2luZG93cykiIHN0RXZ0OmNoYW5nZWQ9Ii8iLz4gPC9yZGY6U2VxPiA8L3htcE1NOkhpc3Rvcnk+IDwvcmRmOkRlc2NyaXB0aW9uPiA8L3JkZjpSREY+IDwveDp4bXBtZXRhPiA8P3hwYWNrZXQgZW5kPSJyIj8+e5Kr7QAAAM5JREFUOBFj+P//PwMlGIXT0NCAgmX4OP/DMLocTgN2794NxiBNNycW/f+5fx6YBvFhcjgNQLYRhEGaG5yN4QYgY5wGwGyF4dfru8BiMHpxhDN+A2IMlMEYZDMMw/gwObwGfNzQ+P//wWn/LzbGgGmYzSCNIBrmHZwG3J2SDTbkcK4fmAY5+UB2CNwVIDZOA+T52FEMALFBBsBcQLQBIAwzAKaJKAMo9gLMAJgLQE4nywVUMQCkEJZwSDIApBCkCB0jJyqcBqDnQFwYOTMBAGADY8kHQdVwAAAADmVYSWZNTQAqAAAACAAAAAAAAADSU5MAAAAASUVORK5CYII=';
+        icon.alt = ''; icon.width = 16; icon.height = 16;
+        Object.assign(icon.style, { display: 'block', maxWidth: 'none', margin: '0', padding: '0' });
+        return icon;
     }
 
     function restoreAutoScanJob() {
