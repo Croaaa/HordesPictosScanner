@@ -3,7 +3,7 @@
 // @description  Scanne les pictos d’une liste de joueurs et conserve chaque relevé séparément.
 // @icon         https://myhordes.fr/build/images/emotes/exploration.3c1e616f.gif
 // @namespace    http://tampermonkey.net/
-// @version      0.10.1
+// @version      0.10.2
 // @author       Eliam
 // @match        https://myhordes.fr/*
 // @match        https://myhordes.de/*
@@ -737,7 +737,7 @@
 
     function persistAutoScanJob() {
         scannerStorage.setItem('autoScanJob', JSON.stringify(autoScanJob));
-        const scan = getSavedScan(autoScanJob?.scanId);
+        const scan = autoScanJob ? getSavedScan(autoScanJob.scanId) : null;
         if (scan) {
             scan.status = autoScanJob.status;
             scan.processed = autoScanJob.index;
@@ -1042,14 +1042,23 @@
             if (preview.hidden) expandedScanPreviews.delete(scan.id);
             else { expandedScanPreviews.add(scan.id); populate(); }
         });
-        actions.appendChild(toggle);
+        const remove = document.createElement('button'); remove.type = 'button';
+        remove.className = 'hps-icon-button pictos-delete-scan'; remove.dataset.scanId = scan.id;
+        remove.title = `Supprimer le scan « ${scan.name} »`;
+        remove.setAttribute('aria-label', remove.title); remove.appendChild(createTrashIcon());
+        remove.addEventListener('click', () => deleteSavedScan(scan.id));
+        actions.style.alignItems = 'center'; actions.append(toggle, remove);
         head.appendChild(actions); card.append(head, preview);
-        return { card, title, detail, preview, toggle, signature: null };
+        return { card, title, detail, preview, toggle, remove, signature: null };
     }
 
     function updateScanHistory() {
         const history = document.getElementById('pictos-scan-history');
         if (!history) return;
+        const deleteAll = document.getElementById('pictos-delete-all-scans');
+        deleteAll.disabled = !scanCollection.scans.length || autoScanJob?.status === 'running';
+        deleteAll.style.opacity = deleteAll.disabled ? '0.5' : '1';
+        deleteAll.title = autoScanJob?.status === 'running' ? 'Attends la fin du scan avant de tout supprimer.' : 'Supprimer tous les scans';
         let cards = scanHistoryViews.get(history);
         if (!cards) { cards = new Map(); scanHistoryViews.set(history, cards); }
         if (!scanCollection.scans.length) {
@@ -1065,6 +1074,7 @@
         [...scanCollection.scans].reverse().forEach((scan, index) => {
             let entry = cards.get(scan.id);
             if (!entry) { entry = createScanHistoryCard(scan); cards.set(scan.id, entry); }
+            entry.remove.disabled = autoScanJob?.status === 'running' && autoScanJob.scanId === scan.id;
             const count = Object.keys(scan.results).length;
             const signature = JSON.stringify([scan.name, scan.status, count, scan.players.length]);
             if (entry.signature !== signature) {
@@ -1121,11 +1131,16 @@
         const errors = document.createElement('ul');
         errors.id = 'pictos-auto-errors'; errors.style.paddingLeft = '18px'; errors.style.margin = '10px 0 0'; errors.hidden = true;
         const historyTitle = document.createElement('h5'); historyTitle.textContent = 'Scans enregistrés';
-        historyTitle.style.marginTop = '22px';
+        Object.assign(historyTitle.style, { margin: '0', flex: '1', minWidth: '0' });
+        const deleteAll = createCustomButton('pictos-delete-all-scans', 'Tout supprimer', deleteAllSavedScans);
+        deleteAll.style.margin = '0';
+        const historyHeading = document.createElement('div');
+        Object.assign(historyHeading.style, { display: 'flex', alignItems: 'center', gap: '12px', margin: '22px 0 6px' });
+        historyHeading.append(historyTitle, deleteAll);
         const history = document.createElement('div'); history.id = 'pictos-scan-history';
         const detail = document.createElement('div'); detail.id = 'pictos-auto-results-host';
         detail.className = 'hps-scan-detail'; detail.style.display = 'none';
-        overview.append(nameHeading, input, help, controls, errors, historyTitle, history);
+        overview.append(nameHeading, input, help, controls, errors, historyHeading, history);
         panel.append(overview, detail);
         return panel;
     }
@@ -2077,22 +2092,39 @@
         });
     }
 
-    // Supprime un relevé sans toucher aux autres scans.
+    function removeSavedScans(ids) {
+        if (autoScanJob?.status === 'paused' && ids.has(autoScanJob.scanId)) stopAutoScan();
+        scanCollection.scans = scanCollection.scans.filter(scan => !ids.has(scan.id));
+        if (ids.has(scanCollection.selectedId)) scanCollection.selectedId = scanCollection.scans.at(-1)?.id || null;
+        if (ids.has(autoScanJob?.scanId)) { autoScanJob = null; persistAutoScanJob(); }
+        ids.forEach(id => expandedScanPreviews.delete(id));
+        if (ids.has(completedScanNoticeId)) completedScanNoticeId = null;
+        persistScanCollection(); showScanOverview(); updateAutoScanPanel();
+    }
+
+    function deleteSavedScan(scanId) {
+        const scan = getSavedScan(scanId);
+        if (!scan) return;
+        if (autoScanJob?.status === 'running' && autoScanJob.scanId === scanId) {
+            alert('Attends la fin de ce scan avant de le supprimer.');
+            return;
+        }
+        if (confirm(`Supprimer le scan « ${scan.name} » ?`)) removeSavedScans(new Set([scanId]));
+    }
+
+    function deleteAllSavedScans() {
+        if (!scanCollection.scans.length) return;
+        if (autoScanJob?.status === 'running') {
+            alert('Attends la fin du scan avant de tout supprimer.');
+            return;
+        }
+        if (confirm('Supprimer tous les scans enregistrés ?')) {
+            removeSavedScans(new Set(scanCollection.scans.map(scan => scan.id)));
+        }
+    }
+
     function createResetResultsButton(scanId) {
-        return createCustomButton('reset-results', 'Supprimer ce scan', () => {
-            if (autoScanJob?.status === 'running' && autoScanJob.scanId === scanId) {
-                alert('Attends la fin de ce scan avant de le supprimer.');
-                return;
-            }
-            const scan = getSavedScan(scanId);
-            if (scan && confirm(`Supprimer le scan « ${scan.name} » ?`)) {
-                if (autoScanJob?.status === 'paused' && autoScanJob.scanId === scanId) stopAutoScan();
-                scanCollection.scans = scanCollection.scans.filter(saved => saved.id !== scanId);
-                scanCollection.selectedId = scanCollection.scans.at(-1)?.id || null;
-                if (autoScanJob?.scanId === scanId) { autoScanJob = null; persistAutoScanJob(); }
-                persistScanCollection(); showScanOverview(); updateAutoScanPanel();
-            }
-        });
+        return createCustomButton('reset-results', 'Supprimer ce scan', () => deleteSavedScan(scanId));
     }
 
     // Copie les valeurs du tableau affiché, dans son ordre de tri.
