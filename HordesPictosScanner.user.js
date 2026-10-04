@@ -3,7 +3,7 @@
 // @description  Scanne les pictos d’une liste de joueurs et conserve chaque relevé séparément.
 // @icon         https://myhordes.fr/build/images/emotes/exploration.3c1e616f.gif
 // @namespace    http://tampermonkey.net/
-// @version      0.10.0
+// @version      0.10.1
 // @author       Eliam
 // @match        https://myhordes.fr/*
 // @match        https://myhordes.de/*
@@ -253,7 +253,7 @@
         { id: 'r_forum', name: 'Messages', rare: false, category: 'Divers' },
     ];
 
-
+    const pictosById = new Map(pictoData.map(picto => [picto.id, picto]));
 
     // *************************************************************************************************** //
     // Fonctions utilitaires (extraction des informations sur le joueur, gestion des pictos)               //
@@ -472,10 +472,10 @@
 
     function addRosterPlayers(players) {
         if (autoScanBusy()) return 0;
-        const known = new Set(playerRoster.map(player => player.id));
+        const known = new Map(playerRoster.map(player => [player.id, player]));
         const normalized = normalizePlayers(players);
         normalized.forEach(player => {
-            const existing = playerRoster.find(known => known.id === player.id);
+            const existing = known.get(player.id);
             if (existing?.name === `Joueur ${player.id}` && player.name !== existing.name) existing.name = player.name;
         });
         const added = normalized.filter(player => !known.has(player.id));
@@ -599,6 +599,7 @@
         const list = document.getElementById('pictos-player-list');
         if (!list) return;
         const busy = autoScanBusy();
+        list.dataset.scanBusy = String(busy);
         const count = document.getElementById('pictos-player-count');
         count.textContent = `${playerRoster.length} joueur${playerRoster.length > 1 ? 's' : ''}`;
         const notice = document.getElementById('pictos-players-notice');
@@ -706,7 +707,7 @@
                 !job.players.every(player => normalizePlayerId(player.id) === player.id && typeof player.name === 'string') ||
                 new Set(job.players.map(player => player.id)).size !== job.players.length ||
                 !Array.isArray(job.selectedIds) || !job.selectedIds.length ||
-                !job.selectedIds.every(id => pictoData.some(picto => picto.id === id)) ||
+                !job.selectedIds.every(id => pictosById.has(id)) ||
                 !Number.isInteger(job.index) || job.index < 0 || job.index > job.players.length ||
                 !Number.isInteger(job.success) || job.success < 0 || job.success > job.index ||
                 !Array.isArray(job.errors) || !job.errors.every(error => typeof error === 'string') ||
@@ -802,7 +803,7 @@
             try { url = new URL(picto.icon, location.origin); }
             catch (_) { throw autoScanError('Une icône de picto est illisible.'); }
             const id = url.pathname.split('/').pop().match(/^(r_[^.]+)(?:\.[^/]*)?\.gif$/)?.[1];
-            if (!id || !pictoData.some(known => known.id === id)) continue;
+            if (!id || !pictosById.has(id)) continue;
             if (!(typeof picto.count === 'number' || typeof picto.count === 'string' && /^\d+$/.test(picto.count)) ||
                 !Number.isSafeInteger(Number(picto.count)) || Number(picto.count) < 0 || counts.has(id)) {
                 throw autoScanError('Une valeur de picto est illisible.');
@@ -828,7 +829,7 @@
                     const data = await requestAutoScanPictos(player, job, token);
                     if (!autoScanIsCurrent(job, token)) return;
                     const values = parseAutoScanPictos(data, job.selectedIds);
-                    saveData(player.id, player.name, values, job.scanId, index + 1);
+                    recordPlayerResult(player.id, player.name, values, job.scanId, index + 1);
                     job.success++;
                 } catch (error) {
                     if (!autoScanIsCurrent(job, token)) return;
@@ -932,7 +933,8 @@
     }
 
     function updateAutoScanPanel() {
-        updatePlayersPanel();
+        const playerList = document.getElementById('pictos-player-list');
+        if (playerList && playerList.dataset.scanBusy !== String(autoScanBusy())) updatePlayersPanel();
         const start = document.getElementById('pictos-auto-start');
         if (!start) return;
         const name = document.getElementById('pictos-scan-name');
@@ -992,68 +994,91 @@
     }
 
     const expandedScanPreviews = new Set();
+    const scanHistoryViews = new WeakMap();
+
+    function createScanHistoryCard(scan) {
+        const card = document.createElement('div'); card.className = 'hps-scan-card';
+        const head = document.createElement('div'); head.className = 'hps-scan-head';
+        const row = document.createElement('button');
+        row.type = 'button'; row.dataset.scanId = scan.id;
+        row.className = 'hps-scan-row pictos-view-scan';
+        row.addEventListener('click', () => viewSavedScan(scan.id));
+        const title = document.createElement('strong');
+        const detail = document.createElement('small');
+        row.append(title, detail); head.appendChild(row);
+        const actions = document.createElement('div'); actions.className = 'hps-scan-preview-actions';
+        const preview = document.createElement('div'); preview.className = 'hps-scan-preview';
+        preview.dataset.scanId = scan.id;
+        preview.hidden = !expandedScanPreviews.has(scan.id);
+        const toggle = document.createElement('button'); toggle.type = 'button';
+        toggle.className = 'hps-preview-toggle';
+        toggle.title = 'Afficher les joueurs et les pictos du scan';
+        toggle.setAttribute('aria-label', toggle.title);
+        const iconSlot = document.createElement('span'); iconSlot.className = 'hps-preview-icon';
+        iconSlot.style.width = '15px';
+        const icon = document.createElement('img'); icon.src = scanPreviewIcons.pictos; icon.alt = '';
+        icon.style.transform = 'translateX(-1px)'; iconSlot.appendChild(icon);
+        toggle.appendChild(iconSlot);
+        toggle.setAttribute('aria-expanded', String(!preview.hidden));
+        const populate = () => {
+            if (preview.childNodes.length) return;
+            const players = document.createElement('div'); players.className = 'hps-preview-list';
+            players.dataset.previewType = 'players';
+            players.setAttribute('role', 'group'); players.setAttribute('aria-label', 'Joueurs du scan');
+            scan.players.forEach(player => players.appendChild(createPlayerTag(player)));
+            const pictos = document.createElement('div'); pictos.className = 'hps-preview-list';
+            pictos.dataset.previewType = 'pictos';
+            pictos.setAttribute('role', 'group'); pictos.setAttribute('aria-label', 'Pictos du scan');
+            scan.selectedIds.forEach(id => {
+                const picto = pictosById.get(id);
+                if (picto) pictos.appendChild(createPictoImage(picto));
+            });
+            preview.append(players, pictos);
+        };
+        if (!preview.hidden) populate();
+        toggle.addEventListener('click', () => {
+            preview.hidden = !preview.hidden;
+            toggle.setAttribute('aria-expanded', String(!preview.hidden));
+            if (preview.hidden) expandedScanPreviews.delete(scan.id);
+            else { expandedScanPreviews.add(scan.id); populate(); }
+        });
+        actions.appendChild(toggle);
+        head.appendChild(actions); card.append(head, preview);
+        return { card, title, detail, preview, toggle, signature: null };
+    }
 
     function updateScanHistory() {
         const history = document.getElementById('pictos-scan-history');
         if (!history) return;
-        const view = JSON.stringify(scanCollection.scans.map(scan => [scan.id, scan.name, scan.status,
-            Object.keys(scan.results).length, scan.players.length]));
-        if (history.dataset.scanView === view) return;
-        history.dataset.scanView = view;
-        history.textContent = '';
-        if (!scanCollection.scans.length) { history.textContent = 'Aucun scan enregistré.'; return; }
+        let cards = scanHistoryViews.get(history);
+        if (!cards) { cards = new Map(); scanHistoryViews.set(history, cards); }
+        if (!scanCollection.scans.length) {
+            if (history.textContent !== 'Aucun scan enregistré.') history.textContent = 'Aucun scan enregistré.';
+            cards.clear();
+            return;
+        }
+        if (!cards.size) history.textContent = '';
+        const ids = new Set(scanCollection.scans.map(scan => scan.id));
+        for (const [id, entry] of cards) {
+            if (!ids.has(id)) { entry.card.remove(); cards.delete(id); }
+        }
         [...scanCollection.scans].reverse().forEach((scan, index) => {
-            const card = document.createElement('div'); card.className = 'hps-scan-card';
-            const head = document.createElement('div'); head.className = 'hps-scan-head';
-            const row = document.createElement('button');
-            row.type = 'button'; row.dataset.scanId = scan.id;
-            row.className = 'hps-scan-row pictos-view-scan';
-            row.addEventListener('click', () => viewSavedScan(scan.id));
-            const title = document.createElement('strong'); title.textContent = scan.name;
-            const detail = document.createElement('small');
-            const status = { running: 'En cours', paused: 'En pause', stopped: 'Arrêté', completed: 'Terminé', manual: 'Manuel' }[scan.status] || '';
-            const date = scan.createdAt ? new Date(scan.createdAt).toLocaleString('fr-FR') + ' · ' : '';
-            detail.textContent = `${date}${Object.keys(scan.results).length}/${scan.players.length} joueurs · ${status}`;
-            row.append(title, detail); head.appendChild(row);
-            const actions = document.createElement('div'); actions.className = 'hps-scan-preview-actions';
-            const preview = document.createElement('div'); preview.className = 'hps-scan-preview';
-            preview.id = `pictos-preview-${index}`; preview.dataset.scanId = scan.id;
-            preview.hidden = !expandedScanPreviews.has(scan.id);
-            const toggle = document.createElement('button'); toggle.type = 'button';
-            toggle.className = 'hps-preview-toggle';
-            toggle.title = 'Afficher les joueurs et les pictos du scan';
-            toggle.setAttribute('aria-label', toggle.title);
-            const iconSlot = document.createElement('span'); iconSlot.className = 'hps-preview-icon';
-            iconSlot.style.width = '15px';
-            const icon = document.createElement('img'); icon.src = scanPreviewIcons.pictos; icon.alt = '';
-            icon.style.transform = 'translateX(-1px)'; iconSlot.appendChild(icon);
-            toggle.appendChild(iconSlot);
-            toggle.setAttribute('aria-controls', preview.id);
-            toggle.setAttribute('aria-expanded', String(!preview.hidden));
-            const populate = () => {
-                if (preview.childNodes.length) return;
-                const players = document.createElement('div'); players.className = 'hps-preview-list';
-                players.dataset.previewType = 'players';
-                players.setAttribute('role', 'group'); players.setAttribute('aria-label', 'Joueurs du scan');
-                scan.players.forEach(player => players.appendChild(createPlayerTag(player)));
-                const pictos = document.createElement('div'); pictos.className = 'hps-preview-list';
-                pictos.dataset.previewType = 'pictos';
-                pictos.setAttribute('role', 'group'); pictos.setAttribute('aria-label', 'Pictos du scan');
-                scan.selectedIds.forEach(id => {
-                    const picto = pictoData.find(picto => picto.id === id);
-                    if (picto) pictos.appendChild(createPictoImage(picto));
-                });
-                preview.append(players, pictos);
-            };
-            if (!preview.hidden) populate();
-            toggle.addEventListener('click', () => {
-                preview.hidden = !preview.hidden;
-                toggle.setAttribute('aria-expanded', String(!preview.hidden));
-                if (preview.hidden) expandedScanPreviews.delete(scan.id);
-                else { expandedScanPreviews.add(scan.id); populate(); }
-            });
-            actions.appendChild(toggle);
-            head.appendChild(actions); card.append(head, preview); history.appendChild(card);
+            let entry = cards.get(scan.id);
+            if (!entry) { entry = createScanHistoryCard(scan); cards.set(scan.id, entry); }
+            const count = Object.keys(scan.results).length;
+            const signature = JSON.stringify([scan.name, scan.status, count, scan.players.length]);
+            if (entry.signature !== signature) {
+                entry.signature = signature;
+                if (entry.title.textContent !== scan.name) entry.title.textContent = scan.name;
+                const status = { running: 'En cours', paused: 'En pause', stopped: 'Arrêté', completed: 'Terminé', manual: 'Manuel' }[scan.status] || '';
+                const date = scan.createdAt ? new Date(scan.createdAt).toLocaleString('fr-FR') + ' · ' : '';
+                entry.detail.textContent = `${date}${count}/${scan.players.length} joueurs · ${status}`;
+            }
+            const previewId = `pictos-preview-${index}`;
+            if (entry.preview.id !== previewId) {
+                entry.preview.id = previewId; entry.toggle.setAttribute('aria-controls', previewId);
+            }
+            if (history.children[index] !== entry.card) history.insertBefore(entry.card, history.children[index] || null);
         });
     }
 
@@ -1152,22 +1177,19 @@
         updateSelectAllButton();
     }
 
-    // Fonction pour charger l'état des pictos et des catégories depuis scannerStorage.
-    function loadSettings() {
-        const savedState = readScannerJSON('pictosState', { pictoStates: {} });
-
+    // Applique la sélection enregistrée aux pictos.
+    function loadSettings(savedState) {
         document.querySelectorAll('#pictos-scanner-popup .picto-button').forEach(picto => {
             picto.style.opacity = savedState.pictoStates?.[picto.title] === '0.15' ? '0.15' : '1';
         });
         updateSelectAllButton();
     }
 
-    // Fonction pour stocker les données des pictos en fonction de l'ID du joueur.
-    function saveData(playerId, playerName, pictosData, scanId, scanOrder) {
+    // Les résultats et la progression sont sauvegardés ensemble après chaque joueur.
+    function recordPlayerResult(playerId, playerName, pictosData, scanId, scanOrder) {
         const scan = getSavedScan(scanId);
         if (!scan) throw new Error('Le scan à enregistrer n’existe plus.');
         scan.results[playerId] = { playerName, pictosData, scanOrder, scannedAt: new Date().toISOString() };
-        persistScanCollection();
     }
 
 
@@ -1177,7 +1199,7 @@
     // *************************************************************************************************** //
 
     // Crée un bouton de picto individuel avec son style, son icône, et ses interactions.
-    function createPictoButton(picto) {
+    function createPictoButton(picto, savedState) {
         const pictoButton = document.createElement('button');
         pictoButton.type = 'button';
         pictoButton.className = `picto-button${picto.rare ? ' hps-rare' : ''}`;
@@ -1186,7 +1208,6 @@
         pictoButton.setAttribute('aria-label', picto.name);
         const pictoImage = createPictoImage(picto);
         pictoButton.appendChild(pictoImage);
-        const savedState = readScannerJSON('pictosState', { pictoStates: {} });
         pictoButton.style.opacity = savedState.pictoStates?.[picto.name] === '0.15' ? '0.15' : '1';
         pictoButton.addEventListener('click', () => {
             if (!prepareSelectionChange()) return;
@@ -1196,7 +1217,7 @@
         return pictoButton;
     }
 
-    function createPictosSection(container, category) {
+    function createPictosSection(container, category, savedState) {
         const row = document.createElement('div');
         row.className = 'hps-selection-row';
         const categoryPictos = document.createElement('div');
@@ -1204,7 +1225,7 @@
         categoryPictos.setAttribute('role', 'group');
         categoryPictos.setAttribute('aria-label', category);
         pictoData.filter(picto => picto.category === category).forEach(picto => {
-            const pictoButton = createPictoButton(picto);
+            const pictoButton = createPictoButton(picto, savedState);
             pictoButton.setAttribute('data-category', category);
             categoryPictos.appendChild(pictoButton);
         });
@@ -1233,42 +1254,11 @@
 
     // Crée le bouton principal "Pictos Scanner" avec le style et les interactions définis.
     function createMainButton() {
-        const button = document.createElement('button');
-
-        button.id = 'pictos-scanner-button';
-        button.innerText = 'Pictos Scanner';
-
+        const button = createCustomButton('pictos-scanner-button', 'Pictos Scanner', displayPopup);
         button.style.width = '100%';
-        button.style.display = 'block';
         button.style.boxSizing = 'border-box';
         button.style.maxWidth = '100%';
         button.style.margin = '6px auto';
-        button.style.background = 'url(/build/images/assets/img/background/bg_button.209bcd56..gif) 50%/cover no-repeat';
-        button.style.border = `solid 1px ${colors.black}`;
-        button.style.borderRadius = '2px';
-        button.style.boxShadow = `0 0 2px ${colors.black}`;
-        button.style.color = colors.lightGold;
-        button.style.cursor = 'pointer';
-        button.style.fontVariant = 'small-caps';
-        button.style.fontWeight = '700';
-        button.style.minHeight = '26px';
-        button.style.padding = '0 8px';
-        button.style.textAlign = 'center';
-        button.style.outline = '1px solid transparent';
-        button.style.transition = 'outline-color 0s';
-
-        button.addEventListener('mouseover', () => {
-            button.style.color = colors.white;
-            button.style.outlineColor = colors.lightGold;
-        });
-
-        button.addEventListener('mouseout', () => {
-            button.style.color = colors.lightGold;
-            button.style.outlineColor = 'transparent';
-        });
-
-        button.addEventListener('click', () => displayPopup());
-
         return button;
     }
 
@@ -1688,6 +1678,7 @@
                 panels[index].style.display = 'block';
 
                 if (name === 'Scans') showScanOverview();
+                if (name === 'Joueurs') updatePlayersPanel();
                 updateAutoScanPanel();
             });
 
@@ -1728,7 +1719,7 @@
     }
 
     // Crée le panel de la section "Sélection" avec les catégories de picto.
-    function createSelectionPanel() {
+    function createSelectionPanel(savedState) {
         const selectionPanel = document.createElement('div');
         selectionPanel.className = 'hps-panel';
         selectionPanel.style.display = 'block';
@@ -1737,7 +1728,7 @@
         const pictoSelectionDiv = document.createElement('div');
         pictoSelectionDiv.className = 'hps-selection-categories';
         const categories = [...new Set(pictoData.map(picto => picto.category))];
-        categories.forEach(category => createPictosSection(pictoSelectionDiv, category));
+        categories.forEach(category => createPictosSection(pictoSelectionDiv, category, savedState));
 
         selectionPanel.appendChild(pictoSelectionDiv);
 
@@ -1786,8 +1777,9 @@
         table.style.color = colors.darkBrown;
         //table.style.width = '100%';
 
+        const selectedIds = new Set(scan?.selectedIds);
         const sortedPictoData = pictoData
-        .filter(picto => scan?.selectedIds.includes(picto.id))
+        .filter(picto => selectedIds.has(picto.id))
         .sort((a, b) => a.name.localeCompare(b.name));
 
         const storedData = readResultsData(scanId);
@@ -1928,6 +1920,10 @@
 
         playerIds.forEach((playerId, rowIndex) => {
             const playerData = storedData[playerId];
+            const values = new Map();
+            playerData.pictosData.forEach(picto => {
+                if (!values.has(picto.pictoId)) values.set(picto.pictoId, picto.value);
+            });
 
             const row = document.createElement('tr');
             row.dataset.playerId = playerId;
@@ -1965,8 +1961,7 @@
                 valueCell.style.textAlign = 'center';
                 valueCell.style.fontSize = '10px';
 
-                const pictoDataForPlayer = playerData.pictosData.find(p => p.pictoId === picto.id) || {};
-                valueCell.innerText = pictoDataForPlayer.value || '0';
+                valueCell.innerText = values.get(picto.id) || '0';
 
                 row.appendChild(valueCell);
             });
@@ -2171,7 +2166,8 @@
         viewedScanId = null;
         const { tabContainer, panels } = createTabBar();
 
-        const selectionPanel = createSelectionPanel();
+        const savedState = readScannerJSON('pictosState', { pictoStates: {} });
+        const selectionPanel = createSelectionPanel(savedState);
         const playersPanel = createPlayersPanel();
         const autoScanPanel = createAutoScanPanel();
 
@@ -2200,21 +2196,44 @@
         document.body.appendChild(popup);
         gameAPI()?.ajax?.load_dynamic_modules?.(playersPanel);
 
-        loadSettings();
+        loadSettings(savedState);
         updateAutoScanPanel();
     }
 
     let scannerButtonResizeObserver = null;
     let scannerButtonSizeTarget = null;
+    let scannerPageObserver = null;
+    let scannerButtonFrame = null;
+    const soulColumnSelector = '.row.soul .cell.rw-5.rw-sm-12.center';
+
+    function isOwnSoul() {
+        return /^\/jx\/soul\/me\/?$/.test(window.location.pathname);
+    }
+
+    function handleScannerMutations(mutations) {
+        if (!isOwnSoul()) return;
+        const relevantSelector = `${soulColumnSelector}, .row.soul, hordes-distinctions, .distinctions, #pictos-scanner-button`;
+        const relevant = mutations.some(mutation => {
+            if (mutation.target.closest?.('#pictos-scanner-popup')) return false;
+            if (mutation.target.closest?.(soulColumnSelector)) return true;
+            return [...mutation.addedNodes, ...mutation.removedNodes].some(node =>
+                node.matches?.(relevantSelector) || node.querySelector?.(relevantSelector));
+        });
+        if (!relevant || scannerButtonFrame !== null) return;
+        scannerButtonFrame = requestAnimationFrame(() => {
+            scannerButtonFrame = null;
+            addScannerButton();
+        });
+    }
 
     // Le bouton suit la largeur du bloc de distinctions, y compris après son chargement.
     function addScannerButton() {
-        if (!/^\/jx\/soul\/me\/?$/.test(window.location.pathname)) {
+        if (!isOwnSoul()) {
             document.getElementById('pictos-scanner-button')?.remove();
             scannerButtonResizeObserver?.disconnect(); scannerButtonSizeTarget = null;
             return;
         }
-        const container = document.querySelector('.row.soul .cell.rw-5.rw-sm-12.center');
+        const container = document.querySelector(soulColumnSelector);
         if (!container) return;
         let button = document.getElementById('pictos-scanner-button');
         if (!button) {
@@ -2250,9 +2269,10 @@
     function logUrlChange() {
         if (!window.hasScannerBeenInitialized) {
             window.hasScannerBeenInitialized = true;
-            const observer = new MutationObserver(addScannerButton);
-            observer.observe(document.body, { childList: true, subtree: true });
+            scannerPageObserver = new MutationObserver(handleScannerMutations);
         }
+        if (isOwnSoul()) scannerPageObserver?.observe(document.body, { childList: true, subtree: true });
+        else scannerPageObserver?.disconnect();
         addScannerButton();
     }
 
